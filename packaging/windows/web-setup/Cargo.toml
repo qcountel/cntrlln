@@ -20,10 +20,11 @@ zip = { version = "7", default-features = false, features = ["deflate-flate2-zli
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
-    "Win32_UI_Controls",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

@@ -1,47 +1,37 @@
-//! The installer window: a branded header, the install folder, shortcut choices, progress and
-//! the Install and Cancel buttons. Installation runs on a worker thread that posts updates back.
+//! The installer window: a dark, fully custom-drawn form with the install folder, shortcut
+//! switches, progress and the Install and Cancel buttons. Installation runs on a worker thread
+//! that posts updates back.
 
 use crate::install::{self, Shortcuts, Step};
+use crate::paint::{self, BACKGROUND, Fonts, HEIGHT, WIDTH, colorref};
 use launcher::PRODUCT_NAME;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontIndirectW, CreateSolidBrush, DT_LEFT, DT_SINGLELINE, DT_TOP, DrawTextW,
-    EndPaint, FillRect, GetStockObject, HBRUSH, HDC, HFONT, PAINTSTRUCT, SelectObject, SetBkColor,
-    SetBkMode, SetTextColor, TRANSPARENT, WHITE_BRUSH,
+use std::time::Instant;
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
 };
+use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, InvalidateRect, LOGFONTW};
+use windows::Win32::Graphics::GdiPlus::{GdiplusStartup, GdiplusStartupInput};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::{
-    BST_CHECKED, ICC_PROGRESS_CLASS, ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX,
-    InitCommonControlsEx, PBM_SETPOS, PBM_SETRANGE32,
-};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, PCWSTR, w};
 
-const INSTALL: i32 = 1;
-const CANCEL: i32 = 2;
-const DESKTOP: i32 = 10;
-const START_MENU: i32 = 11;
-const LAUNCH: i32 = 12;
 const WM_UPDATE: u32 = WM_APP + 1;
 const WM_FINISHED: u32 = WM_APP + 2;
-/// Static control styles that shorten long text with an ellipsis.
-const PATH_ELLIPSIS: u32 = 0x8000;
-const END_ELLIPSIS: u32 = 0x4000;
-
-/// Client size and header height in 96-DPI pixels.
-const WIDTH: i32 = 540;
-const HEIGHT: i32 = 360;
-const HEADER: i32 = 96;
-const MARGIN: i32 = 24;
-const HEADER_COLOR: COLORREF = rgb(0x17, 0x17, 0x1f);
-const SUBTITLE_COLOR: COLORREF = rgb(0xb4, 0xb4, 0xc3);
-const MUTED_COLOR: COLORREF = rgb(0x5f, 0x5f, 0x6b);
+/// Sent after `TrackMouseEvent` once the pointer leaves the client area.
+const WM_MOUSELEAVE: u32 = 0x02a3;
+const ANIMATION_TIMER: usize = 1;
+/// How long a switch knob takes to cross its track.
+const KNOB_SECONDS: f32 = 0.12;
 
 /// The worker's latest status line and progress percentage, read on `WM_UPDATE`.
 static UPDATE: Mutex<Option<(String, u32)>> = Mutex::new(None);
@@ -52,23 +42,99 @@ thread_local! {
     static UI: RefCell<Option<Ui>> = const { RefCell::new(None) };
 }
 
-struct Ui {
-    scale: f32,
-    icon: HICON,
-    title_font: HFONT,
-    body_font: HFONT,
-    header_brush: HBRUSH,
-    install: HWND,
-    cancel: HWND,
-    checkboxes: [HWND; 3],
-    progress: HWND,
-    status: HWND,
-    installing: bool,
-    installed: Option<PathBuf>,
+/// A pointer or keyboard target.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Item {
+    Toggle(usize),
+    Install,
+    Cancel,
 }
 
-const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
-    COLORREF(red as u32 | (green as u32) << 8 | (blue as u32) << 16)
+/// Keyboard focus order.
+const ORDER: [Item; 5] = [
+    Item::Toggle(0),
+    Item::Toggle(1),
+    Item::Toggle(2),
+    Item::Install,
+    Item::Cancel,
+];
+
+pub(crate) struct Toggle {
+    pub(crate) label: &'static str,
+    pub(crate) on: bool,
+    /// Knob position from 0 (off) to 1 (on), animated toward `on`.
+    pub(crate) knob: f32,
+}
+
+pub(crate) enum Phase {
+    Idle { error: Option<String> },
+    Installing { status: String, percent: u32 },
+    Done { client: PathBuf },
+}
+
+impl Phase {
+    pub(crate) fn progress(&self) -> Option<u32> {
+        match self {
+            Self::Installing { percent, .. } => Some(*percent),
+            Self::Done { .. } => Some(100),
+            Self::Idle { .. } => None,
+        }
+    }
+
+    /// The status line and whether it reports an error.
+    pub(crate) fn status(&self) -> (&str, bool) {
+        match self {
+            Self::Idle { error: Some(error) } => (error, true),
+            Self::Idle { error: None } => ("", false),
+            Self::Installing { status, .. } => (status, false),
+            Self::Done { .. } => ("Установка завершена.", false),
+        }
+    }
+
+    pub(crate) fn button_labels(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Done { .. } => ("Играть", "Закрыть"),
+            _ => ("Установить", "Отмена"),
+        }
+    }
+}
+
+pub(crate) struct Ui {
+    pub(crate) scale: f32,
+    pub(crate) icon: HICON,
+    pub(crate) fonts: Fonts,
+    pub(crate) target: String,
+    pub(crate) toggles: [Toggle; 3],
+    pub(crate) hover: Option<Item>,
+    pub(crate) pressed: Option<Item>,
+    pub(crate) focus: Option<Item>,
+    /// The focus ring shows only after keyboard navigation.
+    pub(crate) keyboard: bool,
+    pub(crate) phase: Phase,
+    tracking: bool,
+    animated: Instant,
+}
+
+impl Ui {
+    /// Converts 96-DPI pixels to device pixels.
+    pub(crate) fn px(&self, value: i32) -> i32 {
+        (value as f32 * self.scale).round() as i32
+    }
+
+    fn hit(&self, x: i32, y: i32) -> Option<Item> {
+        let (x, y) = (
+            (x as f32 / self.scale) as i32,
+            (y as f32 / self.scale) as i32,
+        );
+        ORDER.into_iter().find(|item| {
+            let rect = paint::bounds(*item);
+            x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+        })
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        !matches!(self.phase, Phase::Installing { .. })
+    }
 }
 
 /// Opens the window and runs its message loop until it closes.
@@ -76,10 +142,12 @@ pub(crate) fn run() {
     // SAFETY: plain Win32 window creation and message pumping on this thread; every handle
     // passed to a call was returned by the system on this thread.
     unsafe {
-        let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX {
-            dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES,
-        });
+        let mut token = 0;
+        let input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            ..Default::default()
+        };
+        GdiplusStartup(&mut token, &input, std::ptr::null_mut());
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap_or_default().into();
         let scale = GetDpiForSystem() as f32 / 96.0;
         let px = |value: i32| (value as f32 * scale).round() as i32;
@@ -102,7 +170,6 @@ pub(crate) fn run() {
             hInstance: instance,
             hIcon: LoadIconW(Some(instance), PCWSTR(1 as _)).unwrap_or_default(),
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
             lpszClassName: class,
             ..Default::default()
         });
@@ -113,13 +180,64 @@ pub(crate) fn run() {
             right: px(WIDTH),
             bottom: px(HEIGHT),
         };
-        let _ = AdjustWindowRectEx(&mut frame, style, false, WS_EX_CONTROLPARENT);
+        let _ = AdjustWindowRectEx(&mut frame, style, false, WINDOW_EX_STYLE(0));
         let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
         let x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
         let y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+
+        let mut metrics = NONCLIENTMETRICSW {
+            cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
+            ..Default::default()
+        };
+        let _ = SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            metrics.cbSize,
+            Some((&raw mut metrics).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+        let font = |height: i32, weight: i32| {
+            let mut font: LOGFONTW = metrics.lfMessageFont;
+            font.lfHeight = -px(height);
+            font.lfWeight = weight;
+            CreateFontIndirectW(&font)
+        };
+        let fonts = Fonts {
+            title: font(30, 600),
+            body: font(15, 400),
+            small: font(13, 400),
+            button: font(15, 600),
+        };
+        UI.with_borrow_mut(|ui| {
+            *ui = Some(Ui {
+                scale,
+                icon,
+                fonts,
+                target: install::target_dir()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                toggles: [
+                    "Ярлык на рабочем столе",
+                    "Ярлык в меню Пуск",
+                    "Запустить после установки",
+                ]
+                .map(|label| Toggle {
+                    label,
+                    on: true,
+                    knob: 1.0,
+                }),
+                hover: None,
+                pressed: None,
+                focus: Some(Item::Install),
+                keyboard: false,
+                phase: Phase::Idle { error: None },
+                tracking: false,
+                animated: Instant::now(),
+            });
+        });
+
         let title = HSTRING::from(format!("Установка {PRODUCT_NAME}"));
         let Ok(window) = CreateWindowExW(
-            WS_EX_CONTROLPARENT,
+            WINDOW_EX_STYLE(0),
             class,
             &title,
             style,
@@ -134,159 +252,25 @@ pub(crate) fn run() {
         ) else {
             return;
         };
-
-        let mut metrics = NONCLIENTMETRICSW {
-            cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
-            ..Default::default()
-        };
-        let _ = SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS,
-            metrics.cbSize,
-            Some((&raw mut metrics).cast()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        // Dark title bar on Windows 10 20H1+, with the caption matching the form on Windows 11.
+        let dark: i32 = 1;
+        let caption = colorref(BACKGROUND);
+        let _ = DwmSetWindowAttribute(
+            window,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&raw const dark).cast(),
+            size_of::<i32>() as u32,
         );
-        let mut body = metrics.lfMessageFont;
-        body.lfHeight = -px(15);
-        let mut heading = body;
-        heading.lfHeight = -px(30);
-        heading.lfWeight = 600;
-
-        let control = |class: PCWSTR, text: &str, style: u32, id: i32, rect: [i32; 4]| {
-            let child = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                class,
-                &HSTRING::from(text),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(style),
-                px(rect[0]),
-                px(rect[1]),
-                px(rect[2]),
-                px(rect[3]),
-                Some(window),
-                Some(HMENU(id as usize as *mut c_void)),
-                Some(instance),
-                None,
-            )
-            .unwrap_or_default();
-            child
-        };
-        let checkbox = (WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32) as u32;
-        let target = install::target_dir()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        let content = WIDTH - 2 * MARGIN;
-        let label = control(
-            w!("STATIC"),
-            "Папка установки",
-            0,
-            0,
-            [MARGIN, 116, content, 20],
+        let _ = DwmSetWindowAttribute(
+            window,
+            DWMWA_CAPTION_COLOR,
+            (&raw const caption).cast(),
+            size_of_val(&caption) as u32,
         );
-        let path = control(
-            w!("STATIC"),
-            &target,
-            PATH_ELLIPSIS,
-            0,
-            [MARGIN, 138, content, 20],
-        );
-        let checkboxes = [
-            control(
-                w!("BUTTON"),
-                "Ярлык на рабочем столе",
-                checkbox,
-                DESKTOP,
-                [MARGIN, 172, 320, 24],
-            ),
-            control(
-                w!("BUTTON"),
-                "Ярлык в меню Пуск",
-                checkbox,
-                START_MENU,
-                [MARGIN, 198, 320, 24],
-            ),
-            control(
-                w!("BUTTON"),
-                "Запустить после установки",
-                checkbox,
-                LAUNCH,
-                [MARGIN, 224, 320, 24],
-            ),
-        ];
-        let progress = control(
-            w!("msctls_progress32"),
-            "",
-            0,
-            0,
-            [MARGIN, 262, content, 16],
-        );
-        let status = control(
-            w!("STATIC"),
-            "",
-            END_ELLIPSIS,
-            0,
-            [MARGIN, 284, content, 20],
-        );
-        let install = control(
-            w!("BUTTON"),
-            "Установить",
-            (WS_TABSTOP.0 | BS_DEFPUSHBUTTON as u32) as u32,
-            INSTALL,
-            [WIDTH - MARGIN - 96 - 8 - 112, 312, 112, 32],
-        );
-        let cancel = control(
-            w!("BUTTON"),
-            "Отмена",
-            (WS_TABSTOP.0 | BS_PUSHBUTTON as u32) as u32,
-            CANCEL,
-            [WIDTH - MARGIN - 96, 312, 96, 32],
-        );
-        let _ = ShowWindow(progress, SW_HIDE);
-        SendMessageW(progress, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(100)));
-
-        let body_font = CreateFontIndirectW(&body);
-        let title_font = CreateFontIndirectW(&heading);
-        for child in [label, path, status, install, cancel, progress]
-            .into_iter()
-            .chain(checkboxes)
-        {
-            SendMessageW(
-                child,
-                WM_SETFONT,
-                Some(WPARAM(body_font.0 as usize)),
-                Some(LPARAM(1)),
-            );
-        }
-        for checkbox in checkboxes {
-            SendMessageW(
-                checkbox,
-                BM_SETCHECK,
-                Some(WPARAM(BST_CHECKED.0 as usize)),
-                None,
-            );
-        }
-        UI.with_borrow_mut(|ui| {
-            *ui = Some(Ui {
-                scale,
-                icon,
-                title_font,
-                body_font,
-                header_brush: CreateSolidBrush(HEADER_COLOR),
-                install,
-                cancel,
-                checkboxes,
-                progress,
-                status,
-                installing: false,
-                installed: None,
-            });
-        });
         let _ = ShowWindow(window, SW_SHOW);
-        let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(install));
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            if IsDialogMessageW(window, &message).as_bool() {
-                continue;
-            }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -303,45 +287,121 @@ extern "system" fn procedure(
     unsafe {
         match message {
             WM_PAINT => {
-                paint(window);
+                UI.with_borrow(|ui| {
+                    if let Some(ui) = ui {
+                        paint::paint(window, ui);
+                    }
+                });
                 LRESULT(0)
             }
-            WM_CTLCOLORSTATIC => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let muted = UI.with_borrow(|ui| {
-                    ui.as_ref()
-                        .is_some_and(|ui| ui.status.0 == lparam.0 as *mut c_void)
+            WM_ERASEBKGND => LRESULT(1),
+            WM_MOUSEMOVE => {
+                let (x, y) = point(lparam);
+                let track = update(window, |ui| {
+                    ui.hover = ui.hit(x, y);
+                    !std::mem::replace(&mut ui.tracking, true)
                 });
-                SetBkColor(hdc, rgb(0xff, 0xff, 0xff));
-                if muted {
-                    SetTextColor(hdc, MUTED_COLOR);
+                if track == Some(true) {
+                    let mut event = TRACKMOUSEEVENT {
+                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: window,
+                        dwHoverTime: 0,
+                    };
+                    let _ = TrackMouseEvent(&mut event);
                 }
-                LRESULT(GetStockObject(WHITE_BRUSH).0 as isize)
+                LRESULT(0)
             }
-            WM_COMMAND => {
-                match (wparam.0 & 0xffff) as i32 {
-                    INSTALL => on_install(window),
-                    CANCEL => {
-                        let _ = PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0));
+            WM_MOUSELEAVE => {
+                update(window, |ui| {
+                    ui.tracking = false;
+                    ui.hover = None;
+                });
+                LRESULT(0)
+            }
+            WM_SETCURSOR if (lparam.0 & 0xffff) as u32 == HTCLIENT => {
+                let hand = UI.with_borrow(|ui| {
+                    ui.as_ref()
+                        .is_some_and(|ui| ui.enabled() && ui.hover.is_some())
+                });
+                let cursor = if hand { IDC_HAND } else { IDC_ARROW };
+                SetCursor(LoadCursorW(None, cursor).ok());
+                LRESULT(1)
+            }
+            WM_LBUTTONDOWN => {
+                let (x, y) = point(lparam);
+                SetCapture(window);
+                update(window, |ui| {
+                    ui.pressed = ui.hit(x, y).filter(|_| ui.enabled());
+                    ui.keyboard = false;
+                });
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                let (x, y) = point(lparam);
+                let _ = ReleaseCapture();
+                let clicked = update(window, |ui| {
+                    let pressed = ui.pressed.take();
+                    let hit = ui.hit(x, y);
+                    let clicked = pressed.filter(|item| Some(*item) == hit);
+                    if clicked.is_some() {
+                        ui.focus = clicked;
                     }
-                    _ => {}
+                    clicked
+                })
+                .flatten();
+                if let Some(item) = clicked {
+                    activate(window, item);
+                }
+                LRESULT(0)
+            }
+            WM_KEYDOWN => {
+                let key = wparam.0 as u16;
+                if key == VK_TAB.0 {
+                    let back = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                    update(window, |ui| {
+                        let at = ui
+                            .focus
+                            .and_then(|focus| ORDER.iter().position(|item| *item == focus));
+                        let next = match (at, back) {
+                            (None, _) => 0,
+                            (Some(at), false) => (at + 1) % ORDER.len(),
+                            (Some(at), true) => (at + ORDER.len() - 1) % ORDER.len(),
+                        };
+                        ui.focus = Some(ORDER[next]);
+                        ui.keyboard = true;
+                    });
+                } else if key == VK_SPACE.0 || key == VK_RETURN.0 {
+                    let focus = UI.with_borrow(|ui| ui.as_ref().and_then(|ui| ui.focus));
+                    activate(window, focus.unwrap_or(Item::Install));
+                } else if key == VK_ESCAPE.0 {
+                    activate(window, Item::Cancel);
+                }
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == ANIMATION_TIMER => {
+                let moving = update(window, |ui| {
+                    let now = Instant::now();
+                    let step = now.duration_since(ui.animated).as_secs_f32() / KNOB_SECONDS;
+                    ui.animated = now;
+                    let mut moving = false;
+                    for toggle in &mut ui.toggles {
+                        let target = if toggle.on { 1.0 } else { 0.0 };
+                        toggle.knob += (target - toggle.knob).clamp(-step, step);
+                        moving |= toggle.knob != target;
+                    }
+                    moving
+                });
+                if moving != Some(true) {
+                    let _ = KillTimer(Some(window), ANIMATION_TIMER);
                 }
                 LRESULT(0)
             }
             WM_UPDATE => {
-                if let Some((text, percent)) =
-                    UPDATE.lock().ok().and_then(|mut update| update.take())
-                {
-                    UI.with_borrow(|ui| {
-                        if let Some(ui) = ui {
-                            let _ = SetWindowTextW(ui.status, &HSTRING::from(text));
-                            SendMessageW(
-                                ui.progress,
-                                PBM_SETPOS,
-                                Some(WPARAM(percent as usize)),
-                                None,
-                            );
-                        }
+                let latest = UPDATE.lock().ok().and_then(|mut update| update.take());
+                if let Some((status, percent)) = latest {
+                    update(window, |ui| {
+                        ui.phase = Phase::Installing { status, percent }
                     });
                 }
                 LRESULT(0)
@@ -351,7 +411,8 @@ extern "system" fn procedure(
                 LRESULT(0)
             }
             WM_CLOSE => {
-                if !UI.with_borrow(|ui| ui.as_ref().is_some_and(|ui| ui.installing)) {
+                let busy = UI.with_borrow(|ui| ui.as_ref().is_some_and(|ui| !ui.enabled()));
+                if !busy {
                     let _ = DestroyWindow(window);
                 }
                 LRESULT(0)
@@ -365,109 +426,71 @@ extern "system" fn procedure(
     }
 }
 
-/// Draws the dark header with the icon, product name and tagline.
-unsafe fn paint(window: HWND) {
-    // SAFETY: paints between BeginPaint and EndPaint with objects owned by `UI`.
-    unsafe {
-        let mut paint = PAINTSTRUCT::default();
-        let hdc = BeginPaint(window, &mut paint);
-        UI.with_borrow(|ui| {
-            let Some(ui) = ui else { return };
-            let px = |value: i32| (value as f32 * ui.scale).round() as i32;
-            let header = RECT {
-                left: 0,
-                top: 0,
-                right: px(WIDTH),
-                bottom: px(HEADER),
-            };
-            FillRect(hdc, &header, ui.header_brush);
-            let _ = DrawIconEx(
-                hdc,
-                px(MARGIN),
-                px(20),
-                ui.icon,
-                px(56),
-                px(56),
-                0,
-                None,
-                DI_NORMAL,
-            );
-            SetBkMode(hdc, TRANSPARENT);
-            let text = |font: HFONT, color: COLORREF, top: i32, content: &str| {
-                SelectObject(hdc, font.into());
-                SetTextColor(hdc, color);
-                let mut wide: Vec<u16> = content.encode_utf16().collect();
-                let mut rect = RECT {
-                    left: px(MARGIN + 56 + 16),
-                    top: px(top),
-                    right: px(WIDTH - MARGIN),
-                    bottom: px(HEADER),
-                };
-                DrawTextW(hdc, &mut wide, &mut rect, DT_LEFT | DT_TOP | DT_SINGLELINE);
-            };
-            text(ui.title_font, rgb(0xff, 0xff, 0xff), 18, PRODUCT_NAME);
-            text(
-                ui.body_font,
-                SUBTITLE_COLOR,
-                58,
-                "Клиент Minecraft Bedrock с полной поддержкой геймпада",
-            );
-        });
-        let _ = EndPaint(window, &paint);
+/// Applies `change` to the window state and repaints.
+fn update<T>(window: HWND, change: impl FnOnce(&mut Ui) -> T) -> Option<T> {
+    let result = UI.with_borrow_mut(|ui| ui.as_mut().map(change));
+    // SAFETY: `window` is this thread's window.
+    let _ = unsafe { InvalidateRect(Some(window), None, false) };
+    result
+}
+
+fn point(lparam: LPARAM) -> (i32, i32) {
+    let x = (lparam.0 & 0xffff) as u16 as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xffff) as u16 as i16 as i32;
+    (x, y)
+}
+
+/// Runs a click or key press on `item`.
+fn activate(window: HWND, item: Item) {
+    if !UI.with_borrow(|ui| ui.as_ref().is_some_and(Ui::enabled)) {
+        return;
+    }
+    match item {
+        Item::Toggle(index) => {
+            update(window, |ui| {
+                ui.toggles[index].on = !ui.toggles[index].on;
+                ui.animated = Instant::now();
+            });
+            // SAFETY: `window` is this thread's window.
+            unsafe { SetTimer(Some(window), ANIMATION_TIMER, 15, None) };
+        }
+        Item::Cancel => {
+            // SAFETY: as above.
+            let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        }
+        Item::Install => {
+            let installed = UI.with_borrow(|ui| match ui.as_ref().map(|ui| &ui.phase) {
+                Some(Phase::Done { client }) => Some(client.clone()),
+                _ => None,
+            });
+            match installed {
+                Some(client) => launch_and_close(window, &client),
+                None => start(window),
+            }
+        }
     }
 }
 
 /// Locks the form and starts the worker with the chosen shortcuts.
-unsafe fn on_install(window: HWND) {
-    // SAFETY: control handles in `UI` belong to this window's thread.
-    let shortcuts = unsafe {
-        UI.with_borrow_mut(|ui| {
-            let ui = ui.as_mut()?;
-            if let Some(client) = ui.installed.clone() {
-                launch_and_close(window, &client, false);
-                return None;
-            }
-            ui.installing = true;
-            for control in [ui.install, ui.cancel].into_iter().chain(ui.checkboxes) {
-                let _ = EnableWindow(control, false);
-            }
-            let _ = ShowWindow(ui.progress, SW_SHOW);
-            let checked = |control: HWND| {
-                SendMessageW(control, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0
-            };
-            Some(Shortcuts {
-                desktop: checked(ui.checkboxes[0]),
-                start_menu: checked(ui.checkboxes[1]),
-            })
-        })
+fn start(window: HWND) {
+    let Some(shortcuts) = update(window, |ui| {
+        ui.phase = Phase::Installing {
+            status: "Подключение…".to_owned(),
+            percent: 0,
+        };
+        Shortcuts {
+            desktop: ui.toggles[0].on,
+            start_menu: ui.toggles[1].on,
+        }
+    }) else {
+        return;
     };
-    let Some(shortcuts) = shortcuts else { return };
     let handle = window.0 as usize;
     std::thread::spawn(move || {
         let window = HWND(handle as *mut c_void);
-        let shown = std::cell::RefCell::new(None);
+        let shown = RefCell::new(None);
         let report = |step: Step| {
-            let update = match step {
-                Step::Downloading(done, total) => {
-                    let megabytes = |bytes: u64| bytes / (1 << 20);
-                    match total {
-                        Some(total) => {
-                            let percent = (done * 100 / total.max(1)) as u32;
-                            (
-                                format!(
-                                    "Скачивание… {percent}% ({} из {} МБ)",
-                                    megabytes(done),
-                                    megabytes(total)
-                                ),
-                                percent,
-                            )
-                        }
-                        None => (format!("Скачивание… {} МБ", megabytes(done)), 0),
-                    }
-                }
-                Step::Unpacking => ("Распаковка…".to_owned(), 100),
-                Step::Shortcuts => ("Создание ярлыков…".to_owned(), 100),
-            };
+            let update = describe(step);
             // Only a changed line is posted; the UI keeps the newest one pending.
             if shown.borrow().as_ref() == Some(&update) {
                 return;
@@ -476,9 +499,8 @@ unsafe fn on_install(window: HWND) {
             let Ok(mut latest) = UPDATE.lock() else {
                 return;
             };
-            let pending = latest.replace(update).is_some();
-            if !pending {
-                // SAFETY: posting to a window handle owned by the UI thread is thread-safe.
+            if latest.replace(update).is_none() {
+                // SAFETY: posting to a window owned by another thread is thread-safe.
                 let _ = unsafe { PostMessageW(Some(window), WM_UPDATE, WPARAM(0), LPARAM(0)) };
             }
         };
@@ -491,54 +513,47 @@ unsafe fn on_install(window: HWND) {
     });
 }
 
-/// Shows the worker's result: launches or offers to, or reports the error and unlocks the form.
-unsafe fn finished(window: HWND) {
-    let Some(outcome) = OUTCOME.lock().ok().and_then(|mut outcome| outcome.take()) else {
-        return;
-    };
-    // SAFETY: control handles in `UI` belong to this window's thread.
-    unsafe {
-        let launch = UI.with_borrow_mut(|ui| {
-            let ui = ui.as_mut()?;
-            ui.installing = false;
-            let launch =
-                SendMessageW(ui.checkboxes[2], BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
-            match &outcome {
-                Ok(client) => {
-                    ui.installed = Some(client.clone());
-                    let _ = SetWindowTextW(ui.status, &HSTRING::from("Установка завершена."));
-                    let _ = SetWindowTextW(ui.install, w!("Играть"));
-                    let _ = SetWindowTextW(ui.cancel, w!("Закрыть"));
-                    let _ = EnableWindow(ui.install, true);
-                    let _ = EnableWindow(ui.cancel, true);
-                }
-                Err(_) => {
-                    let _ = ShowWindow(ui.progress, SW_HIDE);
-                    let _ = SetWindowTextW(ui.status, &HSTRING::new());
-                    for control in [ui.install, ui.cancel].into_iter().chain(ui.checkboxes) {
-                        let _ = EnableWindow(control, true);
-                    }
-                }
-            }
-            Some(launch)
-        });
-        match outcome {
-            Ok(client) if launch == Some(true) => launch_and_close(window, &client, true),
-            Ok(_) => {}
-            Err(error) => {
-                MessageBoxW(
-                    Some(window),
-                    &HSTRING::from(format!("Не удалось установить {PRODUCT_NAME}.\n\n{error}")),
-                    &HSTRING::from(format!("Установка {PRODUCT_NAME}")),
-                    MB_OK | MB_ICONERROR,
-                );
-            }
+fn describe(step: Step) -> (String, u32) {
+    let megabytes = |bytes: u64| bytes / (1 << 20);
+    match step {
+        Step::Downloading(done, Some(total)) => {
+            let percent = (done * 100 / total.max(1)) as u32;
+            let (done, total) = (megabytes(done), megabytes(total));
+            (
+                format!("Скачивание… {percent}% ({done} из {total} МБ)"),
+                percent,
+            )
         }
+        Step::Downloading(done, None) => (format!("Скачивание… {} МБ", megabytes(done)), 0),
+        Step::Unpacking => ("Распаковка…".to_owned(), 100),
+        Step::Shortcuts => ("Создание ярлыков…".to_owned(), 100),
     }
 }
 
-/// Starts the installed client and closes the installer; a failed start is reported instead.
-unsafe fn launch_and_close(window: HWND, client: &std::path::Path, after_install: bool) {
+/// Shows the worker's result: launches when asked, or offers to; errors return to the form.
+fn finished(window: HWND) {
+    let Some(outcome) = OUTCOME.lock().ok().and_then(|mut outcome| outcome.take()) else {
+        return;
+    };
+    let launch = update(window, |ui| {
+        let _ = UPDATE.lock().map(|mut update| update.take());
+        ui.phase = match &outcome {
+            Ok(client) => Phase::Done {
+                client: client.clone(),
+            },
+            Err(error) => Phase::Idle {
+                error: Some(format!("Не удалось установить: {error}")),
+            },
+        };
+        ui.toggles[2].on
+    });
+    if let (Ok(client), Some(true)) = (outcome, launch) {
+        launch_and_close(window, &client);
+    }
+}
+
+/// Starts the installed client and closes the installer; a failed start is shown instead.
+fn launch_and_close(window: HWND, client: &Path) {
     let directory = client.parent().unwrap_or(client);
     match std::process::Command::new(client)
         .current_dir(directory)
@@ -548,18 +563,12 @@ unsafe fn launch_and_close(window: HWND, client: &std::path::Path, after_install
         Ok(_) => unsafe {
             let _ = DestroyWindow(window);
         },
-        Err(error) => unsafe {
-            let prefix = if after_install {
-                "Установка завершена, но игру"
-            } else {
-                "Игру"
-            };
-            MessageBoxW(
-                Some(window),
-                &HSTRING::from(format!("{prefix} не удалось запустить: {error}")),
-                &HSTRING::from(PRODUCT_NAME),
-                MB_OK | MB_ICONWARNING,
-            );
-        },
+        Err(error) => {
+            update(window, |ui| {
+                ui.phase = Phase::Idle {
+                    error: Some(format!("Не удалось запустить игру: {error}")),
+                };
+            });
+        }
     }
 }

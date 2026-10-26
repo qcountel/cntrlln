@@ -5,6 +5,8 @@
 #[cfg(windows)]
 mod install;
 #[cfg(windows)]
+mod paint;
+#[cfg(windows)]
 mod shortcuts;
 #[cfg(windows)]
 mod window;
