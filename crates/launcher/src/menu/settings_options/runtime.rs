@@ -39,12 +39,23 @@ impl SettingsOptions {
         settings.video.horizontal_fov_degrees = self.value(SettingId::FieldOfView) as f32;
         settings.video.brightness = self.value(SettingId::Gamma) as f32 / 100.0;
         settings.video.distortion_scale = self.value(SettingId::ScreenDistortion) as f32 / 100.0;
+        let look_range = semantic_input::LOOK_SENSITIVITY_RANGE;
+        let multiplier = self.value(SettingId::ControllerSensitivityMultiplier) as f32 / 100.0;
         settings.controls.gamepad_look_sensitivity =
-            (self.value(SettingId::ControllerSensitivity) as f32 / 50.0).max(0.01);
+            (self.value(SettingId::ControllerSensitivity) as f32 / 50.0 * multiplier)
+                .clamp(*look_range.start(), *look_range.end());
         settings.controls.touch_look_sensitivity = (self.value(SettingId::TouchSensitivity) as f32
             / SettingId::TouchSensitivity.definition().default as f32)
             .max(0.01);
         settings.controls.invert_gamepad_y = self.value(SettingId::ControllerInvertYAxis) != 0;
+        settings.controls.gamepad_look_deadzone =
+            self.value(SettingId::ControllerLookDeadzone) as f32 / 100.0;
+        settings.controls.gamepad_look_response =
+            self.value(SettingId::ControllerLookResponse) as f32 / 100.0;
+        settings.controls.gamepad_look_anti_deadzone =
+            self.value(SettingId::ControllerLookAntiDeadzone) as f32 / 100.0;
+        settings.controls.gamepad_move_deadzone =
+            self.value(SettingId::ControllerMoveDeadzone) as f32 / 100.0;
         settings.video.camera_shake = self.value(SettingId::CameraShake) != 0;
         settings.video.damage_bob = self.value(SettingId::DamageBob) as f32 / 100.0;
         settings.video.frame_rate_limit = frame_rate_limit(self.value(SettingId::MaxFramerate));
@@ -73,6 +84,8 @@ impl SettingsOptions {
             self.value(MOUSE_SENSITIVITY_OPTION.id) as f32 / MOUSE_SENSITIVITY_OPTION.max as f32;
         settings.controls.invert_mouse_y = self.value(SettingId::KeyboardMouseInvertYAxis) != 0;
         settings.gameplay.always_sprint = self.value(SettingId::AlwaysSprint) != 0;
+        settings.gameplay.back_sprint = self.value(SettingId::BackSprint) != 0;
+        settings.gameplay.controller_single_use = self.value(SettingId::ControllerSingleUse) != 0;
         settings.gameplay.default_perspective = match self.value(SettingId::ThirdPerson) {
             1 => PerspectiveMode::ThirdPersonBack,
             2 => PerspectiveMode::ThirdPersonFront,
@@ -125,6 +138,41 @@ mod tests {
         assert_eq!(
             controls.gamepad_look_sensitivity,
             original.gamepad_look_sensitivity
+        );
+    }
+
+    /// Stick dead zones default to the router's, survive a save and change only their own stick.
+    #[test]
+    fn controller_deadzones_are_persisted_and_applied_per_stick() {
+        let mut options = SettingsOptions::default();
+        let original = options.user_settings().controls;
+        assert_eq!(original, semantic_input::ControlSettings::default());
+        assert!(options.set(SettingId::ControllerLookDeadzone.index(), 30));
+        let restored = SettingsOptions::decode(&serde_json::to_vec(&options).unwrap()).unwrap();
+        let controls = restored.user_settings().controls;
+        assert_eq!(controls.gamepad_look_deadzone, 0.3);
+        assert_eq!(
+            controls.gamepad_move_deadzone,
+            original.gamepad_move_deadzone
+        );
+        assert!(options.set(SettingId::ControllerMoveDeadzone.index(), 0));
+        assert_eq!(options.user_settings().controls.gamepad_move_deadzone, 0.0);
+    }
+
+    #[test]
+    fn camera_stick_curve_reaches_the_router_settings() {
+        let mut options = SettingsOptions::default();
+        assert_eq!(options.user_settings().controls.gamepad_look_response, 1.0);
+        assert!(options.set(SettingId::ControllerLookResponse.index(), 50));
+        assert!(options.set(SettingId::ControllerLookAntiDeadzone.index(), 20));
+        let restored = SettingsOptions::decode(&serde_json::to_vec(&options).unwrap()).unwrap();
+        let controls = restored.user_settings().controls;
+        assert_eq!(controls.gamepad_look_response, 0.5);
+        assert_eq!(controls.gamepad_look_anti_deadzone, 0.2);
+        assert!(
+            semantic_input::SemanticInputRouter::default()
+                .replace_bindings(controls)
+                .is_ok()
         );
     }
 }

@@ -18,6 +18,11 @@ impl super::UiPresentationRuntime {
         self.menu_scrolls.wheel(point, notches, pixels)
     }
 
+    /// Scrolls the focused menu view by `notches` lines without a pointer, as a gamepad stick does.
+    pub fn scroll_menu_without_pointer(&mut self, notches: f32) -> bool {
+        self.menu_scrolls.wheel_without_pointer(notches)
+    }
+
     /// A menu press on a scrollbar, which then takes no button action.
     pub fn press_menu_scrollbar(&mut self, point: UiPoint) -> bool {
         self.menu_scrolls.press(point)

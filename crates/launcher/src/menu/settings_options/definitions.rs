@@ -251,6 +251,11 @@ const fn slider(
     option(id, label, SettingKind::Slider, min, max, default)
 }
 
+/// Rounds a `0.0..=1.0` fraction to the whole percent a slider stores.
+const fn percent(fraction: f32) -> i32 {
+    (fraction * 100.0 + 0.5) as i32
+}
+
 /// Defines a dropdown in its displayed radio-choice order.
 const fn dropdown(
     id: SettingId,
@@ -555,5 +560,19 @@ settings! {
         [(SettingPanel::GeneralAdvanced, 1)], [], None, None;
     TouchSensitivity => "touch_sensitivity", slider("Touch sensitivity", 0, 100, 50),
         [(SettingPanel::Touch, 0)], [], None, None;
+    ControllerLookDeadzone => "controller_look_deadzone", slider("Camera Stick Dead Zone", 0, percent(semantic_input::MAX_GAMEPAD_DEADZONE), percent(semantic_input::DEFAULT_GAMEPAD_DEADZONE)),
+        [(SettingPanel::Controller, 5)], [], None, None;
+    ControllerMoveDeadzone => "controller_move_deadzone", slider("Movement Stick Dead Zone", 0, percent(semantic_input::MAX_GAMEPAD_DEADZONE), percent(semantic_input::DEFAULT_GAMEPAD_DEADZONE)),
+        [(SettingPanel::Controller, 6)], [], None, None;
+    ControllerSensitivityMultiplier => "controller_sensitivity_multiplier", slider("Controller Sensitivity Multiplier", 10, percent(semantic_input::MAX_CONTROLLER_SENSITIVITY_MULTIPLIER), 100),
+        [(SettingPanel::Controller, 7)], [], None, None;
+    ControllerLookResponse => "controller_look_response", slider("Camera Stick Curve", percent(*semantic_input::GAMEPAD_LOOK_RESPONSE_RANGE.start()), percent(*semantic_input::GAMEPAD_LOOK_RESPONSE_RANGE.end()), 100),
+        [(SettingPanel::Controller, 8)], [], None, None;
+    ControllerLookAntiDeadzone => "controller_look_anti_deadzone", slider("Camera Stick Anti-Dead Zone", 0, percent(semantic_input::MAX_GAMEPAD_LOOK_ANTI_DEADZONE), 0),
+        [(SettingPanel::Controller, 9)], [], None, None;
+    BackSprint => "back_sprint", toggle("Back Sprint", false),
+        [(SettingPanel::Keyboard, 5), (SettingPanel::Controller, 10)], [], None, None;
+    ControllerSingleUse => "controller_single_use", toggle("Single Use Per Press", true),
+        [(SettingPanel::Controller, 11)], [], None, None;
 
 }

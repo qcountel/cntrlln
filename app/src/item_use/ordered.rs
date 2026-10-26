@@ -53,11 +53,13 @@ pub(crate) fn press(
     mut movement: ResMut<MovementTicker>,
     mut swings: ResMut<SwingTracker>,
     mut view: ResMut<LocalViewPose>,
+    settings: Option<Res<client_state::RuntimeSettings>>,
 ) {
     if context.client_world.respawn.input_held() {
         runtime.cancel_for_respawn();
         return;
     }
+    super::observe_single_use(&mut runtime, &context, settings.as_deref());
     swings.sync_ticks_for_item(
         movement.interaction_authority_identity(),
         movement.completed_tick(),

@@ -124,7 +124,8 @@ pub(crate) fn advance_local_physics(
         sprint: input.phase(Action::Sprint),
         sneak: input.phase(Action::Sneak),
         toggle_sprint: gameplay.toggle_sprint,
-        always_sprint: gameplay.always_sprint && input_mode == PlayerInputMode::Mouse,
+        always_sprint: always_sprint_applies(gameplay.always_sprint, input_mode),
+        back_sprint: gameplay.back_sprint,
         toggle_sneak: gameplay.toggle_sneak,
         facts,
         item_use_modifier: item_use
@@ -185,6 +186,12 @@ pub(crate) fn advance_local_physics(
     publish_physics_view(&physics, &mut view);
 }
 
+/// Whether the Always Sprint setting drives sprint for `mode`. Keyboard/mouse and gamepad
+/// follow it; touch keeps its own on-screen sprint control.
+fn always_sprint_applies(enabled: bool, mode: PlayerInputMode) -> bool {
+    enabled && mode != PlayerInputMode::Touch
+}
+
 /// Publishes retained physics while the shared presentation source resolves visual overrides.
 fn publish_physics_view(physics: &LocalPhysicsController, view: &mut LocalViewPose) {
     if let (Some(eye), Some(feet)) = (
@@ -192,5 +199,19 @@ fn publish_physics_view(physics: &LocalPhysicsController, view: &mut LocalViewPo
         physics.render_feet_position(),
     ) {
         view.set_subject_position(Vec3::from_array(eye), Vec3::from_array(feet));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::{PlayerInputMode, always_sprint_applies};
+
+    /// Always Sprint reaches gamepad players as well as keyboard/mouse, never touch.
+    #[test]
+    fn always_sprint_applies_to_keyboard_and_gamepad_but_not_touch() {
+        assert!(always_sprint_applies(true, PlayerInputMode::Mouse));
+        assert!(always_sprint_applies(true, PlayerInputMode::GamePad));
+        assert!(!always_sprint_applies(true, PlayerInputMode::Touch));
+        assert!(!always_sprint_applies(false, PlayerInputMode::GamePad));
     }
 }

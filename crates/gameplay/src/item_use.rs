@@ -138,6 +138,8 @@ impl PendingUseInput {
 pub struct ItemUseRuntime {
     pending: PendingUseInput,
     delay_fix: bool,
+    /// A held button never repeats or restarts a use; only a press starts one.
+    single_use: bool,
     selected_slot: Option<u8>,
     slot_change_pending: bool,
     last_air_use_tick: Option<u64>,
@@ -223,6 +225,12 @@ impl ItemUseRuntime {
         if !enabled {
             self.slot_change_pending = false;
         }
+    }
+
+    /// Limits use to one per press: holding the button, or switching slots while it is held,
+    /// starts no further use.
+    pub fn set_single_use(&mut self, enabled: bool) {
+        self.single_use = enabled;
     }
 
     /// Observes slot changes even without use input; unavailable inventory grants no new use.
@@ -586,7 +594,8 @@ impl ItemUseRuntime {
             || self.use_tick_already_admitted(frame)
             || self.rearm_pending(frame)
             || (!pressed
-                && (!self.repeat_armed
+                && (self.single_use
+                    || !self.repeat_armed
                     || air_use.is_some_and(|air_use| !air_use.repeats_while_held())))
         {
             return;

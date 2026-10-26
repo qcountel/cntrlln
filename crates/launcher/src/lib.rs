@@ -4,12 +4,16 @@
 #[macro_export]
 macro_rules! product_name {
     () => {
-        "Cinnabar"
+        "Controllin"
     };
 }
 
 /// The product name shown in window titles, defaults and the install directory.
 pub const PRODUCT_NAME: &str = product_name!();
+
+/// Whether the client checks for and installs signed releases. This fork publishes none, and
+/// the upstream releases it would find replace the fork with the original client.
+pub const SELF_UPDATES: bool = false;
 
 /// The community Discord invite the client links to for help.
 pub const DISCORD_INVITE_URL: &str = "https://discord.gg/MeEz7BEHcM";

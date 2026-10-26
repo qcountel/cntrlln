@@ -6,7 +6,9 @@ mod ios;
 pub use android::configure_android;
 pub use ios::configure_ios;
 
-const APP_DIR: &str = crate::PRODUCT_NAME;
+/// The per-user data directory under `%LOCALAPPDATA%` or Application Support, apart from the
+/// original client's so the two never share settings, accounts or prepared assets.
+const APP_DIR: &str = "cntrlln";
 
 /// The pinned vanilla resource pack below a resource root, which mirrors `.local/`.
 pub fn vanilla_pack_relative() -> String {

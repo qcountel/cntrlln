@@ -380,3 +380,35 @@ fn inactive_mode_controller_disconnect_still_quarantines_reconnect_until_neutral
         .unwrap();
     assert!(router.finalize().unwrap().phases[Action::Jump as usize].pressed);
 }
+
+#[test]
+fn held_movement_stick_keeps_walking_when_a_screen_closes() {
+    let mut router = SemanticInputRouter::default();
+    router.set_context(InputContext::UiFocused);
+    let held_stick = |activity_sequence| DeviceFrame {
+        controllers: vec![ControllerFrame {
+            device_id: 7,
+            activity_sequence,
+            axes: [0.0, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            buttons: vec![1],
+            ..ControllerFrame::default()
+        }],
+        ..DeviceFrame::default()
+    };
+    router.route(held_stick(1)).unwrap();
+    router.finalize().unwrap();
+
+    router.set_context(InputContext::Gameplay);
+    let mut walked = false;
+    for _ in 0..2 {
+        router.route(held_stick(1)).unwrap();
+        let snapshot = router.finalize().unwrap();
+        walked |= snapshot.movement[1] > 0.0;
+        // The button that closed the screen stays out of gameplay until released.
+        assert_eq!(
+            snapshot.phases[Action::Sneak as usize],
+            Default::default()
+        );
+    }
+    assert!(walked);
+}

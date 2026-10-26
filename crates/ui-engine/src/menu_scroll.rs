@@ -253,6 +253,30 @@ impl<F: PartialEq> MenuScrolls<F> {
         }
     }
 
+    /// Scrolls by `notches` lines without a pointer, as a gamepad stick does: the view holding
+    /// the focused control, or else the one with the most to scroll.
+    pub fn wheel_without_pointer(&mut self, notches: f32) -> bool {
+        let center = |rect: UiRect| {
+            UiPoint::new(
+                (rect.min().x() + rect.max().x()) / 2.0,
+                (rect.min().y() + rect.max().y()) / 2.0,
+            )
+            .ok()
+        };
+        let point = self
+            .focused_bounds
+            .and_then(center)
+            .filter(|point| self.at(*point).is_some())
+            .or_else(|| {
+                self.areas
+                    .iter()
+                    .filter(|area| area.max > 0.0)
+                    .max_by(|a, b| a.max.total_cmp(&b.max))
+                    .and_then(|area| center(area.viewport))
+            });
+        point.is_some_and(|point| self.wheel(point, notches, false))
+    }
+
     /// Scrolls the view under `point` by `notches` (lines) or window pixels.
     pub fn wheel(&mut self, point: UiPoint, notches: f32, pixels: bool) -> bool {
         if !notches.is_finite() {

@@ -1,7 +1,7 @@
 //! Fixed-tick sprint admission and collision-sensitive continuation.
 
 use super::{ModeIntent, ModeObservation};
-use crate::movement::control_modes::{SPRINT_THRESHOLD, can_continue_sprint};
+use crate::movement::control_modes::{SPRINT_THRESHOLD, can_continue_sprint, sprint_lane};
 use sim::Vec3;
 
 const MIN_SPRINT_DISPLACEMENT: f32 = 0.00005;
@@ -32,6 +32,10 @@ impl SprintTrigger {
         observed: ModeObservation,
     ) -> bool {
         self.double_tap_ticks = self.double_tap_ticks.saturating_sub(1);
+        let observed = ModeObservation {
+            move_forward: sprint_lane(observed.move_forward, intent.back_sprint),
+            ..observed
+        };
         let forward = observed.move_forward >= SPRINT_THRESHOLD;
         let admission = forward
             && !intent.sprint_blocked
@@ -136,6 +140,33 @@ mod tests {
         let sprinting = trigger.select(was_sprinting, previous, intent, observed);
         trigger.record_controls(observed.move_forward, observed.sneaking);
         sprinting
+    }
+
+    /// A held sprint starts on backward travel only when the intent allows back sprint.
+    #[test]
+    fn back_sprint_admits_backward_travel() {
+        let mut observed = sprint(Vec3::ZERO, Vec3::ZERO);
+        observed.sprinting = false;
+        observed.sprint_down = true;
+        observed.move_forward = -1.0;
+        let back = ModeIntent {
+            back_sprint: true,
+            ..Default::default()
+        };
+        assert!(!select(
+            &mut SprintTrigger::default(),
+            false,
+            None,
+            ModeIntent::default(),
+            observed
+        ));
+        assert!(select(
+            &mut SprintTrigger::default(),
+            false,
+            None,
+            back,
+            observed
+        ));
     }
 
     /// The wall check tests displacement along the dominant requested axis, with ties allowed.

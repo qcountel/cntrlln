@@ -203,16 +203,16 @@ fn resolves_windows_app_layout_and_user_roots() {
     );
     assert_eq!(
         layout.auth_cache(),
-        PathBuf::from("C:/Users/dev/AppData/Local/Cinnabar/auth/microsoft-token.json")
+        PathBuf::from(format!("C:/Users/dev/AppData/Local/{}/auth/microsoft-token.json", super::APP_DIR))
     );
     // Downloaded art stays where earlier cores cached it, so upgrades keep their cache.
     assert_eq!(
         layout.launcher_artwork_dir(),
-        PathBuf::from("C:/Users/dev/AppData/Local/Cinnabar/auth/catalog-cache/artwork")
+        PathBuf::from(format!("C:/Users/dev/AppData/Local/{}/auth/catalog-cache/artwork", super::APP_DIR))
     );
     assert_eq!(
         layout.resource_pack_cache_dir(),
-        PathBuf::from("C:/Users/dev/AppData/Local/Cinnabar/resource-packs/v1/objects")
+        PathBuf::from(format!("C:/Users/dev/AppData/Local/{}/resource-packs/v1/objects", super::APP_DIR))
     );
 }
 
@@ -261,7 +261,7 @@ fn resolves_macos_app_bundle() {
     );
     assert_eq!(
         layout.resource_pack_cache_dir(),
-        PathBuf::from("/Users/dev/Library/Application Support/Cinnabar/resource-packs/v1/objects")
+        PathBuf::from(format!("/Users/dev/Library/Application Support/{}/resource-packs/v1/objects", super::APP_DIR))
     );
 }
 

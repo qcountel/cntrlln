@@ -42,6 +42,18 @@ pub(crate) fn configure_client_authority_systems(app: &mut App) {
     )
     .add_systems(
         bevy::prelude::PreUpdate,
+        (
+            crate::ui_runtime::gamepad_pointer::drive_ui_pointer,
+            crate::ui_runtime::gamepad_pause::press_escape_for_start,
+        )
+            .before(bevy::input::InputSystems),
+    )
+    .add_systems(
+        bevy::prelude::PreUpdate,
+        crate::semantic_controls::physical::pass_raw_stick_axes.after(bevy::input::InputSystems),
+    )
+    .add_systems(
+        bevy::prelude::PreUpdate,
         crate::ui_runtime::platform_back::press_mouse_back_for_platform_back
             .after(bevy::input::InputSystems)
             .run_if(|| cfg!(target_os = "android")),

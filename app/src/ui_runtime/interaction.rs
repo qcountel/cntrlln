@@ -488,7 +488,9 @@ pub(crate) fn drive_chat_keyboard_input(
     if !runtime.chat_focused() && (!runtime.screen_state().text_focused() || mod_view) && !mod_text
     {
         if (mouse_bindings && binding_mouse(menu.as_deref(), BindingId::Inventory, &mouse_buttons))
-            || binding_gamepad(menu.as_deref(), BindingId::Inventory, &gamepads)
+            || (binding_gamepad(menu.as_deref(), BindingId::Inventory, &gamepads)
+                && !(runtime.inventory_open()
+                    && crate::ui_runtime::gamepad_pointer::claims_press(&gamepads)))
         {
             runtime.toggle_inventory(
                 &mut player_runtime,

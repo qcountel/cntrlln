@@ -84,6 +84,8 @@ pub struct ModeIntent {
     pub sprint_start_blocked: bool,
     /// A user setting explicitly ended the sprint latch.
     pub stop_sprinting: bool,
+    /// Backward travel may start and continue a sprint.
+    pub back_sprint: bool,
 }
 
 /// Per-tick simulation facts read before the tick runs.

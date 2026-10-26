@@ -276,8 +276,12 @@ pub struct GameplaySettings {
     pub default_perspective: PerspectiveMode,
     /// Sprint key toggles a persistent sprint instead of requiring hold.
     pub toggle_sprint: bool,
-    /// Automatically requests sprint while keyboard/mouse forward movement is eligible.
+    /// Automatically requests sprint while keyboard/mouse or gamepad forward movement is eligible.
     pub always_sprint: bool,
+    /// Sprint may start and continue while moving backward, not only forward.
+    pub back_sprint: bool,
+    /// A held gamepad use button acts once per press instead of repeating block uses.
+    pub controller_single_use: bool,
     /// Sneak key toggles a persistent sneak instead of requiring hold.
     pub toggle_sneak: bool,
 }

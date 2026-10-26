@@ -14,6 +14,7 @@ mod remapping;
 mod scroll;
 mod server_list;
 mod settings_pointer;
+mod stick;
 mod touch;
 mod touch_editor;
 
@@ -87,6 +88,7 @@ pub struct GuiScaleDrag {
     menu_touch: Option<u64>,
     editor_touch: Option<touch_editor::Capture>,
     editor_mode: bool,
+    stick: stick::StickNavigation,
 }
 
 impl MenuRuntime {
@@ -325,6 +327,7 @@ pub fn drive_menu_input(
             &mut gui_scale_drag.scroll_touch,
         );
     }
+    let elapsed = time.as_ref().map(|time| time.delta()).unwrap_or_default();
     if let Some(time) = time {
         menu.advance_death_controls(time.delta_secs_f64());
     }
@@ -829,6 +832,20 @@ pub fn drive_menu_input(
         ) {
             menu.go_back_from_input();
         }
+    }
+    let (step, lines) = gui_scale_drag.stick.update(&gamepads, elapsed);
+    if step.is_some() || lines != 0.0 {
+        menu.input_mode = MenuInputMode::Gamepad;
+    }
+    match step {
+        Some([x, 0]) => menu.move_horizontal_focus(x),
+        Some([0, y]) => {
+            menu.move_directional_focus(launcher::menu::view::SettingsFocusAxis::Vertical, y)
+        }
+        _ => {}
+    }
+    if lines != 0.0 {
+        presentation.scroll_menu_without_pointer(lines);
     }
     for input in keyboard_messages.read() {
         modifiers.observe(input);

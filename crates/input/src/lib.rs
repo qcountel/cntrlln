@@ -20,8 +20,11 @@ pub use action::{
 };
 pub use axes::clamp_movement_vector;
 pub use binding::{
-    ActionBinding, AxisDirection, BindingError, ControlSettings, DEFAULT_MOUSE_SENSITIVITY,
-    InputChord, MAX_BINDINGS, ModifierChord, MouseAxis, PhysicalControl,
+    ActionBinding, AxisDirection, BindingError, ControlSettings, DEFAULT_GAMEPAD_DEADZONE,
+    DEFAULT_MOUSE_SENSITIVITY, GAMEPAD_LOOK_RESPONSE_RANGE, GAMEPAD_STICK_NOISE,
+    GAMEPAD_STICK_REST, InputChord, LOOK_SENSITIVITY_RANGE, MAX_BINDINGS,
+    MAX_CONTROLLER_SENSITIVITY_MULTIPLIER, MAX_GAMEPAD_DEADZONE, MAX_GAMEPAD_LOOK_ANTI_DEADZONE,
+    ModifierChord, MouseAxis, PhysicalControl,
 };
 pub use desktop::{KEYBOARD_USAGES, KeyboardKey, ScrollUnit};
 pub use device::{

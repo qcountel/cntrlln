@@ -177,6 +177,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[build-dependencies]
+image.workspace = true
+
 [dev-dependencies]
 resource-pack = { path = "../crates/resource-pack", features = ["test-support"] }
 mimalloc.workspace = true

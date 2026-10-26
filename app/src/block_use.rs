@@ -62,6 +62,31 @@ pub(crate) struct BlockUseContext<'w, 's> {
     /// The level's sneaking dimensions size the player box that blocks placement.
     physics: Option<Res<'w, client_interaction::movement::LocalPhysicsController>>,
     audio_cues: bevy::prelude::MessageWriter<'w, client_audio::audio::LocalBlockCue>,
+    settings: Option<Res<'w, client_state::RuntimeSettings>>,
+}
+
+impl BlockUseContext<'_, '_> {
+    /// Whether a held use repeats for `input_mode`: always, except a gamepad's under the
+    /// player's Single Use Per Press setting.
+    fn repeats_held_use(&self, input_mode: PlayerInputMode) -> bool {
+        !single_use_per_press(self.settings.as_deref(), input_mode)
+    }
+}
+
+/// Whether `input_mode` is a gamepad under the player's Single Use Per Press setting, so a
+/// held use button neither repeats nor restarts a block or item use.
+pub(crate) fn single_use_per_press(
+    settings: Option<&client_state::RuntimeSettings>,
+    input_mode: PlayerInputMode,
+) -> bool {
+    input_mode == PlayerInputMode::GamePad
+        && settings.is_some_and(|settings| {
+            settings
+                .user_settings_update()
+                .1
+                .gameplay
+                .controller_single_use
+        })
 }
 
 /// Drains physical interactions before physics, then evaluates the buffered held picks.

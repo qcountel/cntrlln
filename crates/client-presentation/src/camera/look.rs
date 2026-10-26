@@ -85,7 +85,8 @@ fn analog_degrees_per_look_unit(slider: f32) -> f32 {
 /// Factor turning the router's already-multiplied analog look delta into degrees.
 ///
 /// The router scales raw analog input by the linear multiplier; dividing it back out
-/// lets the slider curve, not the multiplier, set the final angle.
+/// lets the slider curve, not the multiplier, set the final angle. Past the slider's full
+/// multiplier the curve is flat, so the excess scales the angle linearly instead.
 #[must_use]
 pub fn analog_degrees_per_routed_unit(multiplier: f32) -> f32 {
     let multiplier = if multiplier.is_finite() && multiplier > 0.0 {
@@ -93,7 +94,8 @@ pub fn analog_degrees_per_routed_unit(multiplier: f32) -> f32 {
     } else {
         1.0
     };
-    analog_degrees_per_look_unit(multiplier / SLIDER_FULL_MULTIPLIER) / multiplier
+    let slider = multiplier / SLIDER_FULL_MULTIPLIER;
+    analog_degrees_per_look_unit(slider) * slider.max(1.0) / multiplier
 }
 
 /// Analog sticks report a per-frame delta; scale it so turn rate does not follow frame rate.
@@ -215,6 +217,13 @@ mod tests {
         );
         assert!((analog_degrees_per_routed_unit(1.0) - 0.15).abs() < 1e-6);
         assert!(analog_degrees_per_routed_unit(f32::NAN).is_finite());
+    }
+
+    #[test]
+    fn multipliers_past_the_full_slider_turn_proportionally_faster() {
+        let degrees = |multiplier: f32| multiplier * analog_degrees_per_routed_unit(multiplier);
+        let full = degrees(SLIDER_FULL_MULTIPLIER);
+        assert!((degrees(10.0 * SLIDER_FULL_MULTIPLIER) - 10.0 * full).abs() < 1e-4);
     }
 
     #[test]

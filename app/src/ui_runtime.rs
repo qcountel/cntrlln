@@ -25,6 +25,10 @@ pub mod scene_stack;
 pub mod sign_editor;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod touch_pointer;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod gamepad_pointer;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod gamepad_pause;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use forms::{drive_server_form_input, flush_server_form_network};

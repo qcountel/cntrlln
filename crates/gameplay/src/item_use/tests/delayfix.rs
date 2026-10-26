@@ -338,3 +338,27 @@ fn a_rejected_chorus_fruit_use_starts_no_cooldown() {
     assert!(runtime.is_using());
     assert_eq!(runtime.cooldown_progress(cooldown, first.tick), 1.0);
 }
+
+#[test]
+fn single_use_starts_nothing_while_the_button_stays_held() {
+    for delay_fix in [false, true] {
+        let mut runtime = ItemUseRuntime::default();
+        runtime.set_delay_fix(delay_fix);
+        runtime.set_single_use(true);
+        let first = item_frame(1, true, stack(2, SNOWBALL, 16), "minecraft:snowball");
+        runtime.observe_press(true);
+        assert!(runtime.step(&first).swung.is_some());
+
+        let switched = item_frame(2, true, stack(3, SNOWBALL, 16), "minecraft:snowball");
+        assert!(runtime.step(&switched).packets.is_empty());
+        let held = UseFrame {
+            tick: 20,
+            now_millis: first.now_millis + 1_000,
+            ..switched
+        };
+        assert!(runtime.step(&held).packets.is_empty());
+
+        runtime.observe_press(true);
+        assert!(runtime.step(&UseFrame { tick: 21, ..held }).swung.is_some());
+    }
+}

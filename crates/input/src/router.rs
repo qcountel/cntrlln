@@ -152,6 +152,16 @@ impl SemanticInputRouter {
     pub fn set_context(&mut self, context: InputContext) {
         if self.context != context {
             self.queue_held_releases(ReleaseReason::UiFocusTaken);
+            // As in vanilla, a movement stick held while a screen closes keeps walking; held
+            // buttons and the look stick still wait for their release.
+            if context == InputContext::Gameplay {
+                self.quarantined_controls.retain(|control| {
+                    !matches!(
+                        control,
+                        QuarantinedControl::ControllerAxis { axis: 0 | 1, .. }
+                    )
+                });
+            }
             self.context = context;
         }
     }
@@ -278,7 +288,7 @@ impl SemanticInputRouter {
         self.activity_watermark = self.activity_watermark.max(frame_activity_max(&frame));
         discard_button_edges(&mut frame);
         self.update_controller_activity_baselines(&frame);
-        let quarantined_state = evaluate_controller_state(
+        let quarantined_state = resting_controller_state(
             frame
                 .controllers
                 .iter()
@@ -415,7 +425,7 @@ impl SemanticInputRouter {
                 .iter()
                 .any(|controller| controller.device_id == baseline.device_id)
         });
-        let quarantined_state = evaluate_controller_state(
+        let quarantined_state = resting_controller_state(
             frame
                 .controllers
                 .iter()
@@ -710,7 +720,7 @@ fn quarantine_active_controls(
             push_quarantine(output, QuarantinedControl::MouseButton(*button));
         }
     }
-    let controller_state = evaluate_controller_state(frame.controllers.iter(), settings);
+    let controller_state = resting_controller_state(frame.controllers.iter(), settings);
     for controller in &frame.controllers {
         for button in controller
             .buttons
@@ -945,8 +955,41 @@ fn evaluate_controller_state<'a>(
     controllers: impl IntoIterator<Item = &'a crate::ControllerFrame>,
     settings: &ControlSettings,
 ) -> EvaluatedControllerState {
-    // Sampling, mode eligibility, quarantine, and reconnect rearming all
-    // consume this exact component-wise merge and radial-deadzone result.
+    // Sampling, mode eligibility and neutral-family filtering consume this exact
+    // component-wise merge and radial-deadzone result.
+    merge_controller_state(
+        controllers,
+        settings,
+        [
+            settings.gamepad_move_deadzone,
+            settings.gamepad_look_deadzone,
+        ],
+    )
+}
+
+/// The merged state with each stick's dead zone widened to `GAMEPAD_STICK_REST`. Quarantine and
+/// reconnect rearming read it, so a stick resting just past a tiny dead zone still counts as
+/// released instead of staying quarantined.
+fn resting_controller_state<'a>(
+    controllers: impl IntoIterator<Item = &'a crate::ControllerFrame>,
+    settings: &ControlSettings,
+) -> EvaluatedControllerState {
+    let rest = crate::GAMEPAD_STICK_REST;
+    merge_controller_state(
+        controllers,
+        settings,
+        [
+            settings.gamepad_move_deadzone.max(rest),
+            settings.gamepad_look_deadzone.max(rest),
+        ],
+    )
+}
+
+fn merge_controller_state<'a>(
+    controllers: impl IntoIterator<Item = &'a crate::ControllerFrame>,
+    settings: &ControlSettings,
+    [move_deadzone, look_deadzone]: [f32; 2],
+) -> EvaluatedControllerState {
     let mut axes = [0.0_f32; 8];
     let mut buttons = 0_u32;
     for controller in controllers {
@@ -966,8 +1009,14 @@ fn evaluate_controller_state<'a>(
             }
         }
     }
-    let movement = radial_deadzone([axes[0], axes[1]], settings.gamepad_move_deadzone);
-    let look = radial_deadzone([axes[2], axes[3]], settings.gamepad_look_deadzone);
+    let movement = radial_deadzone([axes[0], axes[1]], move_deadzone);
+    let look = crate::axes::anti_deadzone(
+        crate::axes::response_curve(
+            radial_deadzone([axes[2], axes[3]], look_deadzone),
+            settings.gamepad_look_response,
+        ),
+        settings.gamepad_look_anti_deadzone,
+    );
     axes[0..2].copy_from_slice(&movement);
     axes[2..4].copy_from_slice(&look);
     for axis in &mut axes[4..] {

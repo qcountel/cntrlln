@@ -719,3 +719,29 @@ fn repeated_focus_loss_controller_churn_compacts_without_panicking_or_stale_inpu
         .unwrap();
     assert!(router.finalize().unwrap().phases[Action::Jump as usize].pressed);
 }
+
+#[test]
+fn reconnect_resting_above_a_tiny_look_deadzone_still_rearms() {
+    let mut router = SemanticInputRouter::default();
+    router
+        .replace_bindings(settings_with_deadzones(0.02, 0.02))
+        .unwrap();
+    router.route(DeviceFrame::default()).unwrap();
+    router.finalize().unwrap();
+    // A resting stick is never exactly centred; this one sits just past the dead zone.
+    let frame = |activity_sequence, look_x| DeviceFrame {
+        controllers: vec![ControllerFrame {
+            device_id: 7,
+            activity_sequence,
+            axes: [0.0, 0.0, look_x, 0.03, 0.0, 0.0, 0.0, 0.0],
+            ..ControllerFrame::default()
+        }],
+        ..DeviceFrame::default()
+    };
+    for activity_sequence in 1..=2 {
+        router.route(frame(activity_sequence, 0.0)).unwrap();
+        router.finalize().unwrap();
+    }
+    router.route(frame(3, 0.6)).unwrap();
+    assert!(router.finalize().unwrap().look_delta[0] > 0.0);
+}

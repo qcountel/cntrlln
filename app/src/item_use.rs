@@ -191,11 +191,13 @@ pub(crate) fn adopt_server_item_use(
 fn maintain_item_use(
     player_runtime: ResMut<client_state::PlayerRuntime>,
     context: ItemUseContext,
-    runtime: ResMut<ItemUseRuntime>,
+    mut runtime: ResMut<ItemUseRuntime>,
     movement: ResMut<MovementTicker>,
     swings: ResMut<SwingTracker>,
     view: ResMut<client_presentation::local_player::LocalViewPose>,
+    settings: Option<Res<client_state::RuntimeSettings>>,
 ) {
+    observe_single_use(&mut runtime, &context, settings.as_deref());
     produce_use(
         player_runtime,
         context,
@@ -211,11 +213,13 @@ fn maintain_item_use(
 pub(crate) fn prepare_item_release(
     player_runtime: ResMut<client_state::PlayerRuntime>,
     context: ItemUseContext,
-    runtime: ResMut<ItemUseRuntime>,
+    mut runtime: ResMut<ItemUseRuntime>,
     movement: ResMut<MovementTicker>,
     swings: ResMut<SwingTracker>,
     view: ResMut<client_presentation::local_player::LocalViewPose>,
+    settings: Option<Res<client_state::RuntimeSettings>>,
 ) {
+    observe_single_use(&mut runtime, &context, settings.as_deref());
     produce_use(
         player_runtime,
         context,
@@ -225,6 +229,21 @@ pub(crate) fn prepare_item_release(
         view,
         true,
     );
+}
+
+/// Applies Single Use Per Press for the snapshot's input device before item use advances.
+fn observe_single_use(
+    runtime: &mut ItemUseRuntime,
+    context: &ItemUseContext,
+    settings: Option<&client_state::RuntimeSettings>,
+) {
+    let input_mode = context
+        .input
+        .snapshot()
+        .map(|input| gameplay::mining::protocol_input_mode(input.input_mode));
+    runtime.set_single_use(input_mode.is_some_and(|input_mode| {
+        crate::block_use::single_use_per_press(settings, input_mode)
+    }));
 }
 
 /// Resolves assisted releases before the drain and other item actions after it.

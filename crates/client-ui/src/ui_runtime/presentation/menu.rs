@@ -387,7 +387,7 @@ fn append_shell(
             solid_page,
             MenuAction::OpenExitDialog,
             usize::MAX,
-            "Quit Cinnabar",
+            concat!("Quit ", launcher::product_name!()),
             SPACE_MD + SPACE_SM,
             height - SPACE_MD - CONTROL_HEIGHT - SPACE_SM,
             SIDEBAR_WIDTH - SPACE_MD * 1.25,
@@ -693,7 +693,7 @@ fn append_dialog(
             ),
         ),
         MenuDialog::Exit => (
-            "Quit Cinnabar?",
+            concat!("Quit ", launcher::product_name!(), "?"),
             "Your saved servers and account cache will remain available.",
             MenuAction::ConfirmExit,
         ),

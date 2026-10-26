@@ -114,7 +114,9 @@ pub(super) fn maintain_block_use(
         let Some((trigger, due)) = runtime.due(use_phase.held, tick, clock) else {
             break;
         };
-        if trigger == ItemUseTrigger::SimulationTick && !simulates_tick {
+        if trigger == ItemUseTrigger::SimulationTick
+            && (!simulates_tick || !context.repeats_held_use(input_mode))
+        {
             break;
         }
         let Some(selection) = verified_use_selection(&player_runtime, &context.ui) else {

@@ -22,6 +22,7 @@ fn speed_frame(sprint: semantic_input::ActionPhase) -> super::PhysicsFrameInput 
         sneak: Default::default(),
         toggle_sprint: false,
         always_sprint: false,
+        back_sprint: false,
         toggle_sneak: false,
         facts: Default::default(),
         item_use_modifier: None,

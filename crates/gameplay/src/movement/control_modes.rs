@@ -26,6 +26,8 @@ pub struct ControlObservation {
     pub sneak_held: bool,
     pub toggle_sprint: bool,
     pub always_sprint: bool,
+    /// Backward travel satisfies the sprint direction checks; see [`sprint_lane`].
+    pub back_sprint: bool,
     pub toggle_sneak: bool,
     /// Hunger prevents both new and continuing sprints.
     pub sprint_blocked: bool,
@@ -105,7 +107,8 @@ impl ControlModes {
 
     pub fn update(&mut self, observed: ControlObservation) -> ControlOutput {
         let always_sprint = observed.always_sprint && !observed.resolved_movement;
-        let moving_forward = observed.forward >= SPRINT_THRESHOLD;
+        let sprint_forward = sprint_lane(observed.forward, observed.back_sprint);
+        let moving_forward = sprint_forward >= SPRINT_THRESHOLD;
         let sneaking = if observed.hold_sneak {
             self.sneaking
         } else if observed.resolved_movement {
@@ -153,7 +156,7 @@ impl ControlModes {
                 observed.sprint_held
             };
         let directional = if self.sprinting {
-            can_continue_sprint(observed.sideways, observed.forward)
+            can_continue_sprint(observed.sideways, sprint_forward)
         } else {
             moving_forward
         };
@@ -185,6 +188,12 @@ impl ControlModes {
 }
 
 /// Existing sprints permit a reduced forward component only within the forward cone.
+/// The forward input the sprint direction checks read. With `back_sprint`, backward travel
+/// counts like the same amount of forward travel; otherwise only forward travel sprints.
+pub(super) fn sprint_lane(forward: f32, back_sprint: bool) -> f32 {
+    if back_sprint { forward.abs() } else { forward }
+}
+
 pub(super) fn can_continue_sprint(sideways: f32, forward: f32) -> bool {
     (sideways * sideways + forward * forward).sqrt() >= SPRINT_THRESHOLD
         && forward > 0.0
@@ -201,6 +210,24 @@ mod tests {
             forward,
             ..ControlObservation::default()
         }
+    }
+
+    /// Backward travel requests a sprint only with back sprint, and keeps it while held.
+    #[test]
+    fn back_sprint_requests_sprint_while_moving_backward() {
+        let backward = |millis, back_sprint| ControlObservation {
+            sprint_held: true,
+            back_sprint,
+            ..frame(millis, -1.0)
+        };
+        assert!(
+            !ControlModes::default()
+                .update(backward(0, false))
+                .sprint_request
+        );
+        let mut modes = ControlModes::default();
+        assert!(modes.update(backward(0, true)).sprint_request);
+        assert!(modes.update(backward(50, true)).sprint_request);
     }
 
     /// Analogue admission and continuation have distinct input thresholds.
@@ -527,6 +554,7 @@ mod tests {
             toggle_sneak: true,
             toggle_sprint: true,
             always_sprint: true,
+            back_sprint: false,
             sneak_pressed: true,
             sneak_held: true,
             sprint_pressed: true,

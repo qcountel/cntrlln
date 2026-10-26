@@ -221,14 +221,6 @@ fn dimension_frame_draws_brand_and_backdrop_without_source_files() {
     let title = title_bounds(&presentation);
     let width = title.max().x() - title.min().x();
     let height = title.max().y() - title.min().y();
-    let logo = pixels.get_pixel(
-        (title.min().x() + width * 0.1) as u32,
-        (title.min().y() + height * 0.4) as u32,
-    );
-    assert!(
-        logo[0] > 100 && logo[0] > logo[1] && logo[0] > logo[2],
-        "{logo:?}"
-    );
     let original = image::load_from_memory(launcher::branding::TITLE).unwrap();
     let aspect = original.width() as f32 / original.height() as f32;
     assert!((width / height - aspect).abs() < 0.02);

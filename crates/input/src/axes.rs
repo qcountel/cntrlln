@@ -64,7 +64,7 @@ pub(crate) fn directional_axis(value: f32, positive: bool) -> f32 {
 pub(crate) fn radial_deadzone(value: [f32; 2], deadzone: f32) -> [f32; 2] {
     let value = [value[0].clamp(-1.0, 1.0), value[1].clamp(-1.0, 1.0)];
     let magnitude = value[0].hypot(value[1]);
-    if magnitude <= deadzone || magnitude == 0.0 {
+    if magnitude <= deadzone.max(crate::GAMEPAD_STICK_NOISE) {
         return [0.0, 0.0];
     }
     let clamped = magnitude.min(1.0);
@@ -73,6 +73,28 @@ pub(crate) fn radial_deadzone(value: [f32; 2], deadzone: f32) -> [f32; 2] {
         value[0] / magnitude * remapped,
         value[1] / magnitude * remapped,
     ]
+}
+
+/// Raises a stick's deflection to `exponent`, keeping its direction: below 1 a small tilt
+/// grows while zero and a full tilt stay put.
+pub(crate) fn response_curve(value: [f32; 2], exponent: f32) -> [f32; 2] {
+    let magnitude = value[0].hypot(value[1]);
+    if magnitude == 0.0 || exponent == 1.0 {
+        return value;
+    }
+    let scale = magnitude.min(1.0).powf(exponent) / magnitude;
+    [value[0] * scale, value[1] * scale]
+}
+
+/// Lifts a non-zero stick deflection so it starts at `floor` of full travel, keeping its
+/// direction: a rest stays zero and a full tilt stays full.
+pub(crate) fn anti_deadzone(value: [f32; 2], floor: f32) -> [f32; 2] {
+    let magnitude = value[0].hypot(value[1]);
+    if magnitude == 0.0 || floor == 0.0 {
+        return value;
+    }
+    let scale = (floor + (1.0 - floor) * magnitude.min(1.0)) / magnitude;
+    [value[0] * scale, value[1] * scale]
 }
 
 pub(crate) fn merged_touch_movement(frame: &DeviceFrame) -> [f32; 2] {
@@ -137,4 +159,34 @@ pub(crate) fn scale_look_axis(value: f32, sensitivity: f32) -> f32 {
         -MAX_LOOK_DELTA_PER_FRAME / sensitivity,
         MAX_LOOK_DELTA_PER_FRAME / sensitivity,
     ) * sensitivity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{anti_deadzone, radial_deadzone, response_curve};
+
+    #[test]
+    fn anti_deadzone_starts_small_tilts_at_its_floor() {
+        let small = anti_deadzone([0.0, 0.01], 0.2);
+        assert!((small[1] - 0.208).abs() < 1e-6 && small[0] == 0.0);
+        assert_eq!(anti_deadzone([1.0, 0.0], 0.2), [1.0, 0.0]);
+        assert_eq!(anti_deadzone([0.0, 0.0], 0.2), [0.0, 0.0]);
+        assert_eq!(anti_deadzone([0.3, 0.4], 0.0), [0.3, 0.4]);
+    }
+
+    #[test]
+    fn response_curve_lifts_small_tilts_and_keeps_full_ones() {
+        let small = response_curve([0.0, 0.25], 0.5);
+        assert!((small[1] - 0.5).abs() < 1e-6 && small[0] == 0.0);
+        assert_eq!(response_curve([1.0, 0.0], 0.5), [1.0, 0.0]);
+        assert_eq!(response_curve([0.0, 0.0], 0.5), [0.0, 0.0]);
+        assert_eq!(response_curve([0.3, 0.4], 1.0), [0.3, 0.4]);
+    }
+
+    #[test]
+    fn zero_deadzone_ignores_resting_noise_but_keeps_full_travel() {
+        assert_eq!(radial_deadzone([0.01, -0.01], 0.0), [0.0, 0.0]);
+        assert_eq!(radial_deadzone([0.5, 0.0], 0.0), [0.5, 0.0]);
+        assert_eq!(radial_deadzone([1.0, 0.0], 0.0), [1.0, 0.0]);
+    }
 }

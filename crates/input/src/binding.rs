@@ -5,6 +5,36 @@ pub const MAX_BINDINGS: usize = 128;
 /// Vanilla's mouse sensitivity option default; the option spans `0.0..=1.0`.
 pub const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.5;
 
+/// Default radial dead zone of both gamepad sticks, as a fraction of full deflection.
+pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
+
+/// Largest accepted gamepad stick dead zone; a larger one would leave no usable travel.
+pub const MAX_GAMEPAD_DEADZONE: f32 = 0.95;
+
+/// Largest controller sensitivity multiplier applied on top of the camera sensitivity slider.
+pub const MAX_CONTROLLER_SENSITIVITY_MULTIPLIER: f32 = 50.0;
+
+/// Accepted range of the gamepad and touch look-sensitivity multipliers: the analog slider's
+/// 2x at 100% times the largest controller sensitivity multiplier.
+pub const LOOK_SENSITIVITY_RANGE: std::ops::RangeInclusive<f32> =
+    0.01..=2.0 * MAX_CONTROLLER_SENSITIVITY_MULTIPLIER;
+
+/// Smallest stick deflection read as input whatever the dead zone: a resting stick is never
+/// exactly centred, and a stick that never reads neutral stays quarantined after connecting.
+pub const GAMEPAD_STICK_NOISE: f32 = 0.02;
+
+/// Deflection within which a stick counts as released for rearming after a reconnect or focus
+/// change, whatever the dead zone: a stick resting just past a tiny dead zone still rearms.
+pub const GAMEPAD_STICK_REST: f32 = 0.08;
+
+/// Accepted exponents of the camera stick response: deflection past the dead zone is raised to
+/// it, so below 1 a small tilt turns faster while a full tilt keeps its speed.
+pub const GAMEPAD_LOOK_RESPONSE_RANGE: std::ops::RangeInclusive<f32> = 0.25..=2.0;
+
+/// Largest camera stick anti-dead zone: the share of full speed the smallest tilt past the
+/// dead zone starts at.
+pub const MAX_GAMEPAD_LOOK_ANTI_DEADZONE: f32 = 0.5;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MouseAxis {
     XPositive,
@@ -74,6 +104,10 @@ pub struct ControlSettings {
     pub invert_gamepad_y: bool,
     pub gamepad_move_deadzone: f32,
     pub gamepad_look_deadzone: f32,
+    /// Exponent of the camera stick response; 1 is linear. See `GAMEPAD_LOOK_RESPONSE_RANGE`.
+    pub gamepad_look_response: f32,
+    /// Share of full camera speed the smallest tilt past the dead zone starts at; 0 is none.
+    pub gamepad_look_anti_deadzone: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +166,8 @@ impl ControlSettings {
             invert_gamepad_y,
             gamepad_move_deadzone,
             gamepad_look_deadzone,
+            gamepad_look_response: 1.0,
+            gamepad_look_anti_deadzone: 0.0,
         };
         settings.validate(touch_layout)?;
         Ok(settings)
@@ -156,15 +192,22 @@ impl ControlSettings {
         if !(0.0..=1.0).contains(&self.mouse_sensitivity)
             || multipliers
                 .iter()
-                .any(|value| !(0.01..=10.0).contains(value))
+                .any(|value| !LOOK_SENSITIVITY_RANGE.contains(value))
         {
+            return Err(BindingError::SensitivityOutOfRange);
+        }
+        if !GAMEPAD_LOOK_RESPONSE_RANGE.contains(&self.gamepad_look_response) {
             return Err(BindingError::SensitivityOutOfRange);
         }
         let deadzones = [self.gamepad_move_deadzone, self.gamepad_look_deadzone];
         if deadzones.iter().any(|value| !value.is_finite()) {
             return Err(BindingError::NonFiniteDeadzone);
         }
-        if deadzones.iter().any(|value| !(0.0..=0.95).contains(value)) {
+        if deadzones
+            .iter()
+            .any(|value| !(0.0..=MAX_GAMEPAD_DEADZONE).contains(value))
+            || !(0.0..=MAX_GAMEPAD_LOOK_ANTI_DEADZONE).contains(&self.gamepad_look_anti_deadzone)
+        {
             return Err(BindingError::DeadzoneOutOfRange);
         }
         for binding in &self.bindings {
@@ -183,8 +226,8 @@ impl Default for ControlSettings {
             1.0,
             false,
             false,
-            0.15,
-            0.15,
+            DEFAULT_GAMEPAD_DEADZONE,
+            DEFAULT_GAMEPAD_DEADZONE,
         )
         .expect("built-in controls are valid")
     }

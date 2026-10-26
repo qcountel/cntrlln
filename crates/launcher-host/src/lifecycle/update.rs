@@ -396,9 +396,10 @@ impl State {
     }
 }
 
-/// Configures installed clients; stage and network checks begin after startup acknowledgement.
+/// Configures installed clients when [`launcher::SELF_UPDATES`] allows; stage and network checks
+/// begin after startup acknowledgement.
 pub fn check_in_background(layout: &InstallLayout) {
-    if !layout.is_installed() {
+    if !launcher::SELF_UPDATES || !layout.is_installed() {
         return;
     }
     let _ = LAYOUT.set(layout.clone());

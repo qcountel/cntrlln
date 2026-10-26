@@ -1,12 +1,13 @@
 use bevy::{
     ecs::{entity::Entity, system::SystemParam},
     input::{
-        gamepad::{Gamepad, GamepadAxis, GamepadButton},
+        gamepad::{AxisSettings, Gamepad, GamepadAxis, GamepadButton, GamepadSettings},
         mouse::AccumulatedMouseMotion,
         touch::Touches,
     },
     prelude::{
-        ButtonInput, KeyCode, MouseButton, Query, Res, ResMut, Resource, Single, Window, With,
+        Added, ButtonInput, KeyCode, MouseButton, Query, Res, ResMut, Resource, Single, Window,
+        With,
     },
     window::{CursorOptions, PrimaryWindow},
 };
@@ -359,6 +360,20 @@ fn gamepad_button_codes(gamepad: &Gamepad) -> Vec<u8> {
         .collect::<Vec<_>>();
     buttons.sort_unstable();
     buttons
+}
+
+/// Lets stick axes reach the router unfiltered. Bevy's default per-axis square dead zone snaps
+/// near-diagonal aim onto an axis, and its change threshold quantizes slow aim; the router's
+/// radial dead zone, set by the player, is the only one.
+pub(crate) fn pass_raw_stick_axes(
+    mut pads: Query<&mut GamepadSettings, Added<GamepadSettings>>,
+) {
+    let Ok(raw) = AxisSettings::new(-1.0, 0.0, 0.0, 1.0, 0.0) else {
+        return;
+    };
+    for mut settings in &mut pads {
+        settings.default_axis_settings = raw.clone();
+    }
 }
 
 #[cfg(test)]

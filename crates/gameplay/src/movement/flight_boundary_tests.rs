@@ -287,6 +287,7 @@ fn flight_frame(
         sprint: Default::default(),
         toggle_sprint: false,
         always_sprint: false,
+        back_sprint: false,
         toggle_sneak: true,
         facts: super::super::local_facts::LocalMovementFacts {
             can_fly: true,
