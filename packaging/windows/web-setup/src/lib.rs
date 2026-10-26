@@ -31,6 +31,10 @@ mod tests {
         let payload = super::payload();
         assert!(payload.iter().any(|name| name == "bedrock-core.exe"));
         assert!(payload.iter().any(|name| name == "resources"));
-        assert!(!payload.iter().any(|name| name == "userdata" || name == "cinnabar.exe"));
+        assert!(
+            !payload
+                .iter()
+                .any(|name| name == "userdata" || name == "cinnabar.exe")
+        );
     }
 }
